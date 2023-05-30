@@ -46,10 +46,13 @@ int rollr_rdsc[2] = {0, 0};
 float updwn_rdsc = 0;
 float updwn_angle = 0;
 int distance = 0;
+int trgt_angle = 0;
+bool auto_updwn_flag = false;
 
 int8_t updwn_cmd = 0;
 int8_t rollr_cmd = 0;
 int8_t rollr_spd_cmd = 0;
+int8_t auto_updwn_cmd = 0;
 
 int8_t rollr_val[2] = {0, 0};
 
@@ -77,12 +80,12 @@ float Ki = 0.01;
 float Kd = 0.01;
 
 float rollr_Kp = 0.2;
-float rollr_Ki = 0.005;
+float rollr_Ki = 0.005; // 0.005~
 float rollr_Kd = 0.00;
 
 void Core0a(void *args); // PS4 Controller
 void Core0b(void *args);
-// void Core1b(void *args);
+void Core1b(void *args);
 
 uint8_t data[13] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
@@ -117,24 +120,41 @@ void setup() {
 
   xTaskCreatePinnedToCore(Core0a, "Core0a", 4096, NULL, 3, &thp[0], 0); // (タスク名, タスクのサイズ, パラメータ, 優先度, タスクハンドル, コア番号)
   xTaskCreatePinnedToCore(Core0b, "Core0b", 4096, NULL, 3, &thp[1], 0);
+  xTaskCreatePinnedToCore(Core1b, "Core1b", 4096, NULL, 3, &thp[2], 1);
 }
 
 void loop() {
   m3508_read_data(0x201, mangle, mrpm, mtorque);
   dt = millis() - prev_time;
   prev_time = millis();
-  if (Serial2.available() > 0 && Serial2.read() == headerByte){
-    addressByte = Serial2.read(); // アドレス 
-    commandByte1 = Serial2.read(); // 昇降
-    commandByte2 = Serial2.read(); // ローラ速度
-    commandByte3 = Serial2.read(); // ローラ回転
-    checksum = Serial2.read(); // 整合性チェック
-    if (checksum == int8_t(headerByte + addressByte + commandByte1 + commandByte2 + commandByte3)){
-      updwn_cmd = commandByte1;
-      rollr_cmd = commandByte2;
-      rollr_spd_cmd = commandByte3;
-    } 
-    Serial2.flush();
+
+  // 自動昇降機構の制御
+  if (auto_updwn_cmd == 1) {
+    trgt_angle = 31.5;
+    auto_updwn_flag = !auto_updwn_flag;
+  } else if (auto_updwn_cmd == 2) {
+    trgt_angle = 41.0;
+    auto_updwn_flag = !auto_updwn_flag;
+  } else if (auto_updwn_cmd == 3) {
+    trgt_angle = 44.0;
+    auto_updwn_flag = !auto_updwn_flag;
+  } else if (auto_updwn_cmd == 4) {
+    trgt_angle = 0;
+    auto_updwn_flag = !auto_updwn_flag;
+  }
+
+  if (auto_updwn_flag == true) {
+    float error_angle = trgt_angle - updwn_angle;
+    // 差が1deg以下の時は制御しない
+    if (error_angle > 0 && abs(error_angle) < 0.1) {
+      updwn_cmd = 0;
+      auto_updwn_flag = false;
+    } else if (error_angle < 0 && abs(error_angle) < 2.5) {
+      updwn_cmd = 0;
+      auto_updwn_flag = false;
+    } else {
+      updwn_cmd = error_angle > 0 ? 1 : -1;
+    }
   }
 
   if (updwn_cmd == -1 && updwn_angle < 1.7){
@@ -156,10 +176,12 @@ void loop() {
   } else if (rollr_cmd == 2){
     rollr_trgt = 200 + rollr_spd_cmd * 5; // 41deg
   } else if (rollr_cmd == 3){
-    rollr_trgt = 0 + rollr_spd_cmd * 5;
+    rollr_trgt = 200 + rollr_spd_cmd * 5; // 44deg
   } else {
     rollr_trgt = 0;
   }
+
+  rollr_trgt = (rollr_trgt > 300) ? 300 : rollr_trgt;
 
   error = (updwn_cmd * updwn_trgt) - mrpm[0];
   integral += error * dt;
@@ -177,14 +199,12 @@ void loop() {
     rollr_val[i] = rollr_Kp * rollr_error[i] + rollr_Ki * rollr_integral[i] + rollr_Kd * rollr_derivative[i];
   }
 
-  rollr_val[0] = constrain(rollr_val[0], -80, 80);
-  rollr_val[1] = constrain(rollr_val[1], -80, 80);
+  rollr_val[0] = constrain(rollr_val[0], 0, 80);
+  rollr_val[1] = constrain(rollr_val[1], 0, 80);
 
   m3508_make_data(current_data, send_data);
   m3508_send_data(send_data);
-  // rollr_val[0] = constrain(rollr_cmd * 25  + rollr_spd_cmd, -80, 80);
-  // rollr_val[1] = constrain((rollr_cmd * 25 + rollr_spd_cmd) * 1.08, -80, 80);
-  mdds30_control_motor(0x00, -rollr_val[0], rollr_val[1]);
+  mdds30_control_motor(0x00, rollr_val[0], rollr_val[1]);
   delay(1);
 }
 
@@ -211,18 +231,42 @@ void Core0a(void *args) {
 
 void Core0b(void *args){
   while (1) {
+    if (Serial2.available() > 0 && Serial2.read() == headerByte){
+      addressByte = Serial2.read(); // アドレス 
+      commandByte1 = Serial2.read(); // 昇降
+      commandByte2 = Serial2.read(); // ローラ速度
+      commandByte3 = Serial2.read(); // ローラ回転
+      commandByte4 = Serial2.read(); // ローラ回転
+      checksum = Serial2.read(); // 整合性チェック
+      if (checksum == int8_t(headerByte + addressByte + commandByte1 + commandByte2 + commandByte3 + commandByte4)){
+        updwn_cmd = commandByte1;
+        rollr_cmd = commandByte2;
+        rollr_spd_cmd = commandByte3;
+        auto_updwn_cmd = commandByte4;
+      } 
+      Serial2.flush();
+      // while (Serial2.available() > 0) {
+      //   Serial2.read();
+      // }
+   }
+   delay(10);
+  }
+}
+
+void Core1b(void *args){
+  while (1) {
     // Serial.print(String(updwn_cmd) + ", " + String(rollr_cmd));
     // Serial.print(" | ");
     // Serial.print(String(mrpm[0]) + ", " + String(mtorque[0]));
     // Serial.print(" | ");
     // Serial.print(String(current_data[0]));
     // Serial.print(" | ");
-    // Serial.print(String(rollr_rdsc[0]) + ", " + String(rollr_rdsc[1]));
-    // Serial.print(" | ");
-    // Serial.print(String(updwn_rdsc) + ", " + String(updwn_angle));
+    Serial.print(String(rollr_rdsc[0]) + ", " + String(rollr_rdsc[1]));
+    Serial.print(" | ");
+    Serial.print(String(updwn_rdsc) + ", " + String(updwn_angle));
     // Serial.print(" | ");
     // Serial.print(String(updwn_trgt));
-    // Serial.print(" | ");
+    Serial.print(" | ");
     // Serial.println(String(distance));
     Serial.print(dt);
     Serial.println();

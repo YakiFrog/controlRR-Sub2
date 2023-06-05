@@ -21,7 +21,7 @@
 
 // My MacAddress: b8:d6:1a:bc:ee:68
 // e0:5a:1b:75:13:24
-uint8_t monitor_mac_addr[] = {0xe0, 0x5a, 0x1b, 0x75, 0x13, 0x24};
+uint8_t monitor_mac_addr[] = {0x24, 0x6f, 0x28, 0x8f, 0x43, 0x5c};
 
 TaskHandle_t thp[2];
 
@@ -172,7 +172,7 @@ void loop() {
   }
 
   if (rollr_cmd == 1){
-    rollr_trgt = 147 + rollr_spd_cmd * 5; // 32-33deg
+    rollr_trgt = 150 + rollr_spd_cmd * 5; // 32-33deg
   } else if (rollr_cmd == 2){
     rollr_trgt = 200 + rollr_spd_cmd * 5; // 41deg
   } else if (rollr_cmd == 3){
@@ -271,18 +271,20 @@ void Core1b(void *args){
     Serial.print(dt);
     Serial.println();
 
-    // rollr_rdsc[0] を data[0], data[1]
+    // 上ローラの角速度[rad/s] rollr_rdsc[0] を data[0], data[1]
     data[0] = (uint8_t)(rollr_rdsc[0] >> 8) & 0xff; // 上位8bit
     data[1] = (uint8_t)rollr_rdsc[0] & 0xff; // 下位8bit
-    // rollr_rdsc[1] を data[2], data[3]
+    // 下ローラの角速度[rad/s] rollr_rdsc[1] を data[2], data[3]
     data[2] = (uint8_t)(rollr_rdsc[1] >> 8) & 0xff; // 上位8bit
     data[3] = (uint8_t)rollr_rdsc[1] & 0xff; // 下位8bit
-    // updwn_angle 
+    // 昇降角度[deg] updwn_angle
     data[4] = (uint8_t)updwn_angle;
+    // 距離 distance[??] 
     data[5] = (uint8_t)(distance >> 8) & 0xff; // 上位8bit
     data[6] = (uint8_t)distance & 0xff; // 下位8bit
-    // updwn_rdsc
+    // 昇降機構の角速度[rad/s] updwn_rdsc
     data[8] = (uint8_t)updwn_rdsc & 0xff; // 下位8bit
+    // 微分周期
     data[12] = (uint8_t)dt;
     esp_now_send(monitor_mac_addr, data, sizeof(data)); // データを送信
     delay(50);
@@ -291,5 +293,5 @@ void Core1b(void *args){
 
 /* 
 ToDo;
-・ローラをPIDさせる
+・ローラをPIDさせる -> OK
 */
